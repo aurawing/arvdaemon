@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,10 +10,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/yottachain/YTCrypto"
+	"golang.org/x/sys/windows/registry"
 )
 
 //var cfgFile string
@@ -20,6 +24,8 @@ import (
 var keyID int
 var privateKey string
 var keyMgrIf string
+var listenPort int64
+var keyManageAddr string
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -29,6 +35,45 @@ var rootCmd = &cobra.Command{
 	// Uncomment the following line if your bare application
 	// has an action associated with it:
 	Run: func(cmd *cobra.Command, args []string) {
+		port, kma, err := ReadRegistry()
+		if err != nil {
+			fmt.Printf("从注册表获取配置文件失败: %s\n", err)
+			return
+		}
+		listenPort = port
+		keyManageAddr = kma
+		arr := strings.Split(os.Args[0], "\\")
+		fileName := arr[len(arr)-1]
+		var CommandName string
+		var CommandArgs []string
+		if fileName != "arvdaemon.exe" {
+			file, err := exec.LookPath(os.Args[0])
+			if err != nil {
+				fmt.Printf("从ARV服务获取配置文件失败: %s\n", err)
+				return
+			}
+			fullPath, err := filepath.Abs(file)
+			if err != nil {
+				fmt.Printf("从ARV服务获取配置文件失败: %s\n", err)
+				return
+			}
+			data, err := GetDaemonConf(fullPath)
+			if err != nil {
+				fmt.Printf("从ARV服务获取配置文件失败: %s\n", err)
+				return
+			}
+			keyID = data.KeyID
+			if keyMgrIf == "" && keyManageAddr != "" {
+				keyMgrIf = keyManageAddr
+			}
+			CommandName = data.ExeName
+			CommandArgs = args
+
+			//privateKey = "5KfsAaJJ5aBDtwcADVooBkmAR35VdQ19GWeRqrVbqs5euy4qKqR"
+		} else {
+			CommandName = args[0]
+			CommandArgs = args[1:]
+		}
 		if keyID == 0 {
 			fmt.Println("密钥ID不能为空")
 			return
@@ -40,7 +85,7 @@ var rootCmd = &cobra.Command{
 		if privateKey == "" {
 			resp, err := GetPublicKey(keyMgrIf, keyID)
 			if err != nil {
-				fmt.Printf("从密钥管理系统URL获取私钥失败：%s\n", resp.Message)
+				fmt.Printf("从密钥管理系统URL获取私钥失败：%s\n", err)
 				return
 			}
 			privateKey = resp.Data.PubKey
@@ -63,7 +108,7 @@ var rootCmd = &cobra.Command{
 		}
 		fmt.Printf("注册进程ID：%d\n", os.Getpid())
 		fmt.Printf("注册密钥ID：%d\n", keyID)
-		childCmd := exec.Command(args[0], args[1:]...)
+		childCmd := exec.Command(CommandName, CommandArgs...)
 		fmt.Print("启动进程：")
 		fmt.Println(args)
 		stdout, err := childCmd.StdoutPipe()
@@ -115,6 +160,7 @@ func Execute() {
 }
 
 func init() {
+	cobra.MousetrapHelpText = ""
 	rootCmd.Flags().IntVarP(&keyID, "key-id", "u", 0, "私钥编号")
 	rootCmd.Flags().StringVarP(&privateKey, "privatekey", "p", "", "Base58编码形式的私钥")
 	rootCmd.Flags().StringVarP(&keyMgrIf, "key-manager-interface", "m", "", "密钥管理服务的接口地址，使用-p参数会覆盖本配置")
@@ -124,6 +170,18 @@ type PubKeyResp struct {
 	Code    int         `json:"code"`
 	Message string      `json:"message"`
 	Data    *PubKeyData `json:"data"`
+}
+
+type DaemonConfResp struct {
+	Code int             `json:"code"`
+	Msg  string          `json:"msg"`
+	Data *DaemonConfItem `json:"data"`
+}
+type DaemonConfItem struct {
+	DaemonName    string `json:"daemonName"`
+	ExeName       string `json:"exeName"`
+	KeyID         int    `json:"keyID"`
+	KeyManageAddr string `json:"keyManageAddr"`
 }
 
 type PubKeyData struct {
@@ -147,4 +205,52 @@ func GetPublicKey(url string, keyID int) (*PubKeyResp, error) {
 		return nil, errors.New(response.Message)
 	}
 	return response, nil
+}
+
+func GetDaemonConf(daemonName string) (*DaemonConfItem, error) {
+	rep := []byte{filepath.Separator, filepath.Separator}
+	daemonName = strings.Replace(daemonName, string(filepath.Separator), string(rep), -1)
+	post := "{\"name\":\"loaddaemonconf\",\"daemonName\":\"" + daemonName + "\"}"
+	//fmt.Println(daemonName)
+	var jsonStr = []byte(post)
+	req, err := http.NewRequest("POST", fmt.Sprintf("http://127.0.0.1:%d", listenPort), bytes.NewBuffer(jsonStr))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	reader := io.Reader(resp.Body)
+	response := new(DaemonConfResp)
+	err = json.NewDecoder(reader).Decode(&response)
+	if err != nil {
+		return nil, err
+	}
+	if response.Code != 0 {
+		return nil, errors.New(response.Msg)
+	}
+	return response.Data, nil
+}
+
+func ReadRegistry() (int64, string, error) {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Services\\ArvCtl", registry.READ)
+	if err != nil {
+		return -1, "", err
+	}
+	defer key.Close()
+	kma, _, err := key.GetStringValue("keyManageAddr")
+	if err != nil {
+		return -1, "", err
+	}
+	port, _, err := key.GetIntegerValue("listenPort")
+	if err != nil {
+		return -1, "", err
+	}
+	fmt.Printf("Port: %d\n", port)
+	fmt.Printf("KeyManageAddr: %s\n", kma)
+	return int64(port), kma, nil
 }
