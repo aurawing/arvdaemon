@@ -41,12 +41,15 @@ var rootCmd = &cobra.Command{
 			return
 		}
 		listenPort = port
-		keyManageAddr = kma
+		if keyManageAddr == "" {
+			keyManageAddr = kma
+		}
 		arr := strings.Split(os.Args[0], "\\")
 		fileName := arr[len(arr)-1]
 		var CommandName string
 		var CommandArgs []string
-		if fileName != "arvdaemon.exe" {
+		fileNameBase := strings.Split(fileName, ".")[0]
+		if fileNameBase != "arvdaemon" {
 			file, err := exec.LookPath(os.Args[0])
 			if err != nil {
 				fmt.Printf("从ARV服务获取配置文件失败: %s\n", err)
@@ -63,6 +66,9 @@ var rootCmd = &cobra.Command{
 				return
 			}
 			keyID = data.KeyID
+			if data.KeyManageAddr != "" {
+				keyManageAddr = data.KeyManageAddr
+			}
 			if keyMgrIf == "" && keyManageAddr != "" {
 				keyMgrIf = keyManageAddr
 			}
@@ -88,7 +94,7 @@ var rootCmd = &cobra.Command{
 				fmt.Printf("从密钥管理系统URL获取私钥失败：%s\n", err)
 				return
 			}
-			privateKey = resp.Data.PubKey
+			privateKey = resp.Data.PrvKey
 		}
 		//timestr := time.Now().Format("15-04-05")
 		timest := time.Now().Unix()
@@ -169,7 +175,7 @@ func init() {
 type PubKeyResp struct {
 	Code    int         `json:"code"`
 	Message string      `json:"message"`
-	Data    *PubKeyData `json:"data"`
+	Data    *PrvKeyData `json:"data"`
 }
 
 type DaemonConfResp struct {
@@ -181,11 +187,11 @@ type DaemonConfItem struct {
 	DaemonName    string `json:"daemonName"`
 	ExeName       string `json:"exeName"`
 	KeyID         int    `json:"keyID"`
-	KeyManageAddr string `json:"keyManageAddr"`
+	KeyManageAddr string `json:"url"`
 }
 
-type PubKeyData struct {
-	PubKey string `json:"pubKey"`
+type PrvKeyData struct {
+	PrvKey string `json:"prvKey"`
 }
 
 func GetPublicKey(url string, keyID int) (*PubKeyResp, error) {
