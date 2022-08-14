@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -26,12 +25,16 @@ var privateKey string
 var keyMgrIf string
 var listenPort int64
 var keyManageAddr string
+var procName string
+var auth string
+var inherit string
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "arvdaemon",
 	Short: "配合ARV过滤服务拉起指定的子进程",
-	Long:  `启动后该程序会在文件过滤服务中注册当前进程ID，然后拉起指定的子进程`,
+	Long: `版本号：1.0.0.0
+	启动后该程序会在文件过滤服务中注册当前进程ID，然后拉起指定的子进程`,
 	// Uncomment the following line if your bare application
 	// has an action associated with it:
 	Run: func(cmd *cobra.Command, args []string) {
@@ -77,11 +80,15 @@ var rootCmd = &cobra.Command{
 
 			//privateKey = "5KfsAaJJ5aBDtwcADVooBkmAR35VdQ19GWeRqrVbqs5euy4qKqR"
 		} else {
-			CommandName = args[0]
-			CommandArgs = args[1:]
+			if len(args) > 0 {
+				CommandName = args[0]
+			}
+			if len(args) > 1 {
+				CommandArgs = args[1:]
+			}
 		}
-		if keyID == 0 {
-			fmt.Println("密钥ID不能为空")
+		if procName != "" && auth != "true" && auth != "false" {
+			fmt.Println("authorise参数不正确")
 			return
 		}
 		if privateKey == "" && keyMgrIf == "" {
@@ -97,62 +104,103 @@ var rootCmd = &cobra.Command{
 			privateKey = resp.Data.PrvKey
 		}
 		//timestr := time.Now().Format("15-04-05")
+		inheritPH := 0
+		if inherit == "true" {
+			inheritPH = 1
+		}
 		timest := time.Now().Unix()
-		msg := fmt.Sprintf("\\?SursenLogin?\\%d\\%d", keyID, timest)
+		msg := fmt.Sprintf("\\?SursenLogin?\\%d\\%d\\%d", keyID, timest, inheritPH)
+		if procName != "" {
+			if auth == "false" {
+				msg = fmt.Sprintf("\\?SursenRegot?\\%d\\%s\\%d\\%d", keyID, procName, timest, inheritPH)
+			} else {
+				msg = fmt.Sprintf("\\?SursenRegin?\\%d\\%s\\%d\\%d", keyID, procName, timest, inheritPH)
+			}
+		}
 		sig, err := YTCrypto.Sign(privateKey, []byte(msg))
 		if err != nil {
 			fmt.Println("签名失败")
 			return
 		}
-		path := fmt.Sprintf("C:\\?SursenLogin?\\%d\\%d\\%s\\", keyID, timest, sig)
+		path := fmt.Sprintf("C:\\?SursenLogin?\\%d\\%d\\%d\\%s\\", keyID, timest, inheritPH, sig)
+		if procName != "" {
+			if auth == "false" {
+				path = fmt.Sprintf("C:\\?SursenRegot?\\%d\\%s\\%d\\%d\\%s\\", keyID, procName, timest, inheritPH, sig)
+			} else {
+				path = fmt.Sprintf("C:\\?SursenRegin?\\%d\\%s\\%d\\%d\\%s\\", keyID, procName, timest, inheritPH, sig)
+			}
+		}
 		f, err := os.Create(path)
 		if err != nil {
-			fmt.Printf("进程注册失败：%s\n", err.Error())
+			if procName != "" {
+				if auth == "false" {
+					fmt.Printf("进程%s清除授权失败: %s\n", procName, err.Error())
+				} else {
+					fmt.Printf("进程%s授权失败：%s\n", procName, err.Error())
+				}
+			} else {
+				fmt.Printf("进程注册失败：%s\n", err.Error())
+			}
 			return
 		} else {
 			f.Close()
+		}
+		if procName != "" {
+			if auth == "false" {
+				fmt.Printf("进程%s清除授权成功\n", procName)
+			} else {
+				fmt.Printf("进程%s授权成功：%d\n", procName, keyID)
+			}
+			return
 		}
 		fmt.Printf("注册进程ID：%d\n", os.Getpid())
 		fmt.Printf("注册密钥ID：%d\n", keyID)
 		childCmd := exec.Command(CommandName, CommandArgs...)
 		fmt.Print("启动进程：")
 		fmt.Println(args)
-		stdout, err := childCmd.StdoutPipe()
-		childCmd.Stderr = childCmd.Stdout
-		if err != nil {
-			panic(err)
-		}
-		stdoutBuf := bufio.NewReader(stdout)
+		// stdout, err := childCmd.StdoutPipe()
+		// childCmd.Stderr = childCmd.Stdout
+		// if err != nil {
+		// 	panic(err)
+		// }
+		// stdoutBuf := bufio.NewReader(stdout)
+		//var stdoutBuf, stderrBuf bytes.Buffer
+		//childCmd.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
+		//childCmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+		childCmd.Stdout = os.Stdout
+		childCmd.Stderr = os.Stderr
+		childCmd.Stdin = os.Stdin
+		childCmd.Env = append(childCmd.Env, os.Environ()...)
 		err = childCmd.Start()
 		if err != nil {
 			panic(err)
 		}
-		for {
-			line, _, err := stdoutBuf.ReadLine()
-			if err == io.EOF {
-				break
-			}
-			fmt.Println(string(line))
+		// for {
+		// 	line, _, err := stdoutBuf.ReadLine()
+		// 	if err == io.EOF {
+		// 		break
+		// 	}
+		// 	fmt.Println(string(line))
 
-		}
+		// }
 		childCmd.Wait()
 		//timestr = time.Now().Format("15-04-05")
-		timest = time.Now().Unix()
-		msg = fmt.Sprintf("\\?SursenLogot?\\%d\\%d", keyID, timest)
-		sig, err = YTCrypto.Sign(privateKey, []byte(msg))
-		if err != nil {
-			fmt.Println("签名失败")
-			return
-		}
-		path = fmt.Sprintf("C:\\?SursenLogot?\\%d\\%d\\%s\\", keyID, timest, sig)
-		f, err = os.Create(path)
-		if err != nil {
-			fmt.Println("进程退出失败")
-			return
-		} else {
-			f.Close()
-			fmt.Printf("注销进程ID：%d\n", os.Getpid())
-		}
+		// timest = time.Now().Unix()
+		// msg = fmt.Sprintf("\\?SursenLogot?\\%d\\%d", keyID, timest)
+		// sig, err = YTCrypto.Sign(privateKey, []byte(msg))
+		// if err != nil {
+		// 	fmt.Println("签名失败")
+		// 	return
+		// }
+		// path = fmt.Sprintf("C:\\?SursenLogot?\\%d\\%d\\%s\\", keyID, timest, sig)
+		// f, err = os.Create(path)
+		// if err != nil {
+		// 	fmt.Println("进程退出失败")
+		// 	return
+		// } else {
+		// 	f.Close()
+		// 	fmt.Printf("注销进程ID：%d\n", os.Getpid())
+		// }
 	},
 }
 
@@ -170,6 +218,9 @@ func init() {
 	rootCmd.Flags().IntVarP(&keyID, "key-id", "u", 0, "私钥编号")
 	rootCmd.Flags().StringVarP(&privateKey, "privatekey", "p", "", "Base58编码形式的私钥")
 	rootCmd.Flags().StringVarP(&keyMgrIf, "key-manager-interface", "m", "", "密钥管理服务的接口地址，使用-p参数会覆盖本配置")
+	rootCmd.Flags().StringVarP(&procName, "reg-proc-name", "r", "", "授权的进程名")
+	rootCmd.Flags().StringVarP(&auth, "authorise", "a", "", "对指定进程授权或取消")
+	rootCmd.Flags().StringVarP(&inherit, "inherit", "i", "false", "是否对子进程自动授权")
 }
 
 type PubKeyResp struct {
