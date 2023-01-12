@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,9 +73,9 @@ var rootCmd = &cobra.Command{
 			if data.KeyManageAddr != "" {
 				keyManageAddr = data.KeyManageAddr
 			}
-			if keyMgrIf == "" && keyManageAddr != "" {
-				keyMgrIf = keyManageAddr
-			}
+			// if keyMgrIf == "" && keyManageAddr != "" {
+			// 	keyMgrIf = keyManageAddr
+			// }
 			CommandName = data.ExeName
 			CommandArgs = args
 
@@ -86,6 +87,9 @@ var rootCmd = &cobra.Command{
 			if len(args) > 1 {
 				CommandArgs = args[1:]
 			}
+		}
+		if keyMgrIf == "" && keyManageAddr != "" {
+			keyMgrIf = keyManageAddr
 		}
 		if procName != "" && auth != "true" && auth != "false" {
 			fmt.Println("authorise参数不正确")
@@ -107,6 +111,8 @@ var rootCmd = &cobra.Command{
 		inheritPH := 0
 		if inherit == "true" {
 			inheritPH = 1
+		} else {
+			inherit = "false"
 		}
 		timest := time.Now().Unix()
 		msg := fmt.Sprintf("\\?SursenLogin?\\%d\\%d\\%d", keyID, timest, inheritPH)
@@ -151,6 +157,34 @@ var rootCmd = &cobra.Command{
 			} else {
 				fmt.Printf("进程%s授权成功：%d\n", procName, keyID)
 			}
+			//TODO: ArvCtl注册进程
+			post := "{\"name\":\"saveregproc\",\"procName\":\"" + procName + "\",\"inherit\":" + inherit + ",\"keyID\":" + strconv.Itoa(keyID) + ",\"add\":" + auth + "}"
+			var jsonStr = []byte(post)
+			req, err := http.NewRequest("POST", fmt.Sprintf("http://127.0.0.1:%d", listenPort), bytes.NewBuffer(jsonStr))
+			if err != nil {
+				fmt.Printf("进程%s注册失败：%s\n", procName, err)
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			client := &http.Client{}
+			resp, err := client.Do(req)
+			if err != nil {
+				fmt.Printf("进程%s注册失败：%s\n", procName, err)
+				return
+			}
+			defer resp.Body.Close()
+			reader := io.Reader(resp.Body)
+			response := new(DaemonConfResp)
+			err = json.NewDecoder(reader).Decode(&response)
+			if err != nil {
+				fmt.Printf("进程%s注册失败：%s\n", procName, err)
+				return
+			}
+			if response.Code != 0 {
+				fmt.Printf("进程%s注册失败：%s\n", procName, response.Msg)
+				return
+			}
+			fmt.Printf("进程%s注册成功\n", procName)
 			return
 		}
 		fmt.Printf("注册进程ID：%d\n", os.Getpid())
