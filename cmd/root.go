@@ -136,20 +136,20 @@ var rootCmd = &cobra.Command{
 				path = fmt.Sprintf("C:\\?SursenRegin?\\%d\\%s\\%d\\%d\\%s\\", keyID, procName, timest, inheritPH, sig)
 			}
 		}
-		f, err := os.Create(path)
+		_, err = os.Create(path)
 		if err != nil {
-			if procName != "" {
-				if auth == "false" {
-					fmt.Printf("进程%s清除授权失败: %s\n", procName, err.Error())
+			if !strings.Contains(err.Error(), "The filename, directory name, or volume label syntax is incorrect.") {
+				if procName != "" {
+					if auth == "false" {
+						fmt.Printf("进程%s清除授权失败: %s\n", procName, err.Error())
+					} else {
+						fmt.Printf("进程%s授权失败：%s\n", procName, err.Error())
+					}
 				} else {
-					fmt.Printf("进程%s授权失败：%s\n", procName, err.Error())
+					fmt.Printf("进程注册失败：%s\n", err.Error())
 				}
-			} else {
-				fmt.Printf("进程注册失败：%s\n", err.Error())
+				return
 			}
-			return
-		} else {
-			f.Close()
 		}
 		if procName != "" {
 			if auth == "false" {
@@ -280,7 +280,7 @@ type PrvKeyData struct {
 }
 
 func GetPublicKey(url string, keyID int) (*PubKeyResp, error) {
-	fullURL := fmt.Sprintf("%s/api/encryption/key/v1/getprv?id=%d", url, keyID)
+	fullURL := fmt.Sprintf("%s/api/encryption/kms/v1/getprv?id=%d", url, keyID)
 	resp, err := http.Get(fullURL)
 	if err != nil {
 		return nil, err
